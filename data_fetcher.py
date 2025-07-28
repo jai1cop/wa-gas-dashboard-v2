@@ -57,84 +57,183 @@ def fetch_csv(key, force=False):
 
     except Exception as e:
         print(f"[ERROR] Could not load {key}: {e}")
-        if key == "nameplate":
-            return pd.DataFrame(columns=["facilityname", "facilitytype", "capacityquantity"])
-        elif key == "mto_future":
-            return pd.DataFrame(columns=["facilityname", "facilitytype", "fromgasdate", "outlookquantity"])
-        elif key == "flows":
-            return pd.DataFrame(columns=["gasdate", "facilityname", "facilitytype", "supply", "demand"])
         return pd.DataFrame()
 
 def clean_nameplate(df):
-    # Updated for actual column names: capacityquantity instead of nameplaterating
-    required = {"facilityname", "facilitytype", "capacityquantity"}
-    if not required.issubset(df.columns):
-        print(f"[WARNING] Missing nameplate columns: {required - set(df.columns)}")
+    # Debug: Check what facility types actually exist
+    if not df.empty and 'facilitytype' in df.columns:
+        print(f"[DEBUG] Nameplate facility types: {df['facilitytype'].unique()}")
+    
+    # Look for production facilities - try different possible values
+    production_variants = ['production', 'Production', 'PRODUCTION', 'prod']
+    prod_mask = df['facilitytype'].isin(production_variants) if 'facilitytype' in df.columns else pd.Series([False] * len(df))
+    
+    if not prod_mask.any():
+        print(f"[WARNING] No production facilities found in nameplate data")
+        print(f"Available facility types: {df['facilitytype'].unique() if 'facilitytype' in df.columns else 'Column missing'}")
         return pd.DataFrame(columns=["FacilityName", "TJ_Nameplate"])
 
-    prod = df[df["facilitytype"] == "production"].copy()
-    prod = prod[["facilityname", "capacityquantity"]]
-    prod.rename(columns={
-        "facilityname": "FacilityName", 
-        "capacityquantity": "TJ_Nameplate"
+    prod = df[prod_mask].copy()
+    
+    # Handle capacity quantity column
+    capacity_col = None
+    for col in ['capacityquantity', 'capacity', 'nameplaterating']:
+        if col in prod.columns:
+            capacity_col = col
+            break
+    
+    if capacity_col is None:
+        print(f"[WARNING] No capacity column found in nameplate data")
+        return pd.DataFrame(columns=["FacilityName", "TJ_Nameplate"])
+    
+    result = prod[['facilityname', capacity_col]].copy()
+    result.rename(columns={
+        'facilityname': 'FacilityName',
+        capacity_col: 'TJ_Nameplate'
     }, inplace=True)
-    return prod
+    
+    print(f"[DEBUG] Cleaned nameplate: {len(result)} facilities")
+    return result
 
 def clean_mto(df):
-    # Updated for actual column names: fromgasdate, outlookquantity
-    required = {"facilityname", "facilitytype", "fromgasdate", "outlookquantity"}
-    if not required.issubset(df.columns):
-        print(f"[WARNING] Missing MTO columns: {required - set(df.columns)}")
+    # Debug: Check facility types in MTO data
+    if not df.empty and 'facilitytype' in df.columns:
+        print(f"[DEBUG] MTO facility types: {df['facilitytype'].unique()}")
+    
+    # Look for production facilities
+    production_variants = ['production', 'Production', 'PRODUCTION', 'prod']
+    prod_mask = df['facilitytype'].isin(production_variants) if 'facilitytype' in df.columns else pd.Series([False] * len(df))
+    
+    if not prod_mask.any():
+        print(f"[WARNING] No production facilities found in MTO data")
         return pd.DataFrame(columns=["FacilityName", "GasDay", "TJ_Available"])
 
-    df["fromgasdate"] = pd.to_datetime(df["fromgasdate"], errors="coerce")
-    prod = df[df["facilitytype"] == "production"].copy()
-    prod = prod[["facilityname", "fromgasdate", "outlookquantity"]].dropna(subset=["fromgasdate"])
-    prod.rename(columns={
-        "facilityname": "FacilityName",
-        "fromgasdate": "GasDay", 
-        "outlookquantity": "TJ_Available"
+    # Handle date column
+    date_col = None
+    for col in ['fromgasdate', 'gasdate', 'date']:
+        if col in df.columns:
+            date_col = col
+            break
+    
+    if date_col is None:
+        print(f"[WARNING] No date column found in MTO data")
+        return pd.DataFrame(columns=["FacilityName", "GasDay", "TJ_Available"])
+    
+    # Handle capacity column
+    capacity_col = None
+    for col in ['outlookquantity', 'capacity', 'quantity']:
+        if col in df.columns:
+            capacity_col = col
+            break
+    
+    if capacity_col is None:
+        print(f"[WARNING] No capacity column found in MTO data")
+        return pd.DataFrame(columns=["FacilityName", "GasDay", "TJ_Available"])
+
+    prod = df[prod_mask].copy()
+    prod[date_col] = pd.to_datetime(prod[date_col], errors="coerce")
+    prod = prod.dropna(subset=[date_col])
+    
+    result = prod[['facilityname', date_col, capacity_col]].copy()
+    result.rename(columns={
+        'facilityname': 'FacilityName',
+        date_col: 'GasDay',
+        capacity_col: 'TJ_Available'
     }, inplace=True)
-    return prod
+    
+    print(f"[DEBUG] Cleaned MTO: {len(result)} records")
+    return result
 
 def build_supply_profile():
     nameplate = clean_nameplate(fetch_csv("nameplate"))
     mto = clean_mto(fetch_csv("mto_future"))
 
-    if nameplate.empty or mto.empty:
-        print("[WARNING] Empty supply data")
+    print(f"[DEBUG] Nameplate shape: {nameplate.shape}, MTO shape: {mto.shape}")
+
+    if nameplate.empty and mto.empty:
+        print("[WARNING] Both nameplate and MTO data empty")
+        return pd.DataFrame(columns=["FacilityName", "GasDay", "TJ_Available", "TJ_Nameplate"])
+    
+    if mto.empty:
+        # If no MTO data, create dummy future dates with nameplate capacity
+        print("[WARNING] No MTO data, using nameplate only")
+        if not nameplate.empty:
+            dates = pd.date_range(start=pd.Timestamp.now(), periods=30, freq='D')
+            supply_list = []
+            for _, facility in nameplate.iterrows():
+                for date in dates:
+                    supply_list.append({
+                        'FacilityName': facility['FacilityName'],
+                        'GasDay': date,
+                        'TJ_Available': facility['TJ_Nameplate'],
+                        'TJ_Nameplate': facility['TJ_Nameplate']
+                    })
+            return pd.DataFrame(supply_list)
         return pd.DataFrame(columns=["FacilityName", "GasDay", "TJ_Available", "TJ_Nameplate"])
 
+    if nameplate.empty:
+        # If no nameplate data, use MTO data only
+        print("[WARNING] No nameplate data, using MTO only")
+        mto['TJ_Nameplate'] = mto['TJ_Available']  # Use MTO as nameplate
+        return mto
+
+    # Merge nameplate and MTO data
     supply = mto.merge(nameplate, on="FacilityName", how="left")
     supply["TJ_Available"] = supply["TJ_Available"].fillna(supply["TJ_Nameplate"])
+    
+    print(f"[DEBUG] Final supply profile: {supply.shape}")
     return supply
 
 def build_demand_profile():
-    # Updated for actual flow data structure: gasdate, demand columns
     flows = fetch_csv("flows")
-    required = {"gasdate", "facilityname", "demand"}
-    if not required.issubset(flows.columns):
-        print(f"[WARNING] Missing flow columns: {required - set(flows.columns)}")
+    
+    # Handle different possible date column names
+    date_col = None
+    for col in ['gasdate', 'date', 'gasday']:
+        if col in flows.columns:
+            date_col = col
+            break
+    
+    if date_col is None:
+        print("[WARNING] No date column found in flows data")
         return pd.DataFrame(columns=["GasDay", "TJ_Demand"])
 
-    flows["gasdate"] = pd.to_datetime(flows["gasdate"], errors="coerce")
+    flows[date_col] = pd.to_datetime(flows[date_col], errors="coerce")
+    flows = flows.dropna(subset=[date_col])
     
-    # Aggregate demand by date
-    demand = flows.groupby("gasdate")["demand"].sum().reset_index()
-    demand.rename(columns={"gasdate": "GasDay", "demand": "TJ_Demand"}, inplace=True)
-    demand = demand.dropna(subset=["GasDay"])
-    return demand
+    # Aggregate demand by date (sum all demand across facilities)
+    if 'demand' in flows.columns:
+        demand = flows.groupby(date_col)['demand'].sum().reset_index()
+        demand.rename(columns={date_col: 'GasDay', 'demand': 'TJ_Demand'}, inplace=True)
+        print(f"[DEBUG] Demand profile: {demand.shape}")
+        return demand
+    else:
+        print("[WARNING] No 'demand' column found in flows data")
+        return pd.DataFrame(columns=["GasDay", "TJ_Demand"])
 
 def get_model():
     sup = build_supply_profile()
     dem = build_demand_profile()
 
-    if sup.empty or dem.empty:
-        print("[WARNING] Incomplete data - returning empty")
+    print(f"[DEBUG] get_model - Supply: {sup.shape}, Demand: {dem.shape}")
+
+    if dem.empty:
+        print("[WARNING] No demand data - model incomplete")
         return sup, dem
 
+    if sup.empty:
+        print("[WARNING] No supply data - creating model with demand only")
+        dem['TJ_Available'] = 0  # No supply available
+        dem['Shortfall'] = dem['TJ_Available'] - dem['TJ_Demand']
+        return sup, dem
+
+    # Aggregate total daily supply
     total_supply = sup.groupby("GasDay")["TJ_Available"].sum().reset_index()
+    
+    # Merge with demand and calculate shortfall
     model = dem.merge(total_supply, on="GasDay", how="left")
+    model['TJ_Available'] = model['TJ_Available'].fillna(0)  # Fill missing supply with 0
     model["Shortfall"] = model["TJ_Available"] - model["TJ_Demand"]
     
+    print(f"[DEBUG] Final model: {model.shape}, columns: {list(model.columns)}")
     return sup, model
