@@ -1,30 +1,24 @@
-import streamlit as st
-import pandas as pd
-import plotly.express as px
+import data_fetcher as dfc
 
-st.set_page_config("WA Gas Dashboard", layout="wide")
-st.title("WA Gas Supply & Demand Dashboard")
+# Load real AEMO data
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def load_real_data():
+    try:
+        return dfc.get_model()
+    except Exception as e:
+        st.error(f"Error loading AEMO data: {e}")
+        return pd.DataFrame(), pd.DataFrame()
 
-# Test with sample data first
-sample_data = {
-    'Date': pd.date_range('2025-07-28', periods=30),
-    'Supply': [1800 + i*5 for i in range(30)],
-    'Demand': [1600 + i*3 for i in range(30)]
-}
+# Manual refresh button
+if st.sidebar.button("Refresh AEMO Data"):
+    st.cache_data.clear()
+    st.sidebar.success("Data refreshed!")
 
-df = pd.DataFrame(sample_data)
-df['Balance'] = df['Supply'] - df['Demand']
+sup, model = load_real_data()
 
-# Simple chart
-fig = px.line(df, x='Date', y=['Supply', 'Demand'], 
-              title="WA Gas Supply vs Demand")
-st.plotly_chart(fig, use_container_width=True)
-
-# Balance chart
-fig2 = px.bar(df, x='Date', y='Balance',
-              color=df['Balance'] > 0,
-              color_discrete_map={True: 'green', False: 'red'},
-              title="Daily Supply-Demand Balance")
-st.plotly_chart(fig2, use_container_width=True)
-
-st.success("✅ Basic dashboard working! Ready to add real AEMO data.")
+if model.empty:
+    st.error("No data available - using sample data")
+    # Fall back to your sample data code
+else:
+    st.success(f"✅ Loaded {len(model)} days of real AEMO data")
+    # Use real data for charts
