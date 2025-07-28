@@ -33,80 +33,20 @@ if st.sidebar.button("Refresh AEMO Data"):
 # Load data
 sup, model = load_real_data()
 
-# COMPREHENSIVE DEBUG SECTION
+# DEBUG SECTION (Optional - can be removed once working)
 st.sidebar.write("**📊 Debug Information:**")
 st.sidebar.write(f"Supply DataFrame shape: {sup.shape}")
 st.sidebar.write(f"Model DataFrame shape: {model.shape}")
 
-# Show DataFrame columns and samples
 if not sup.empty:
     st.sidebar.write("**Supply columns:**", list(sup.columns))
-    st.sidebar.write("Supply sample:")
-    st.sidebar.dataframe(sup.head(3))
+    # Check for duplicates
+    if all(col in sup.columns for col in ['GasDay', 'FacilityName']):
+        duplicates = sup.groupby(['GasDay', 'FacilityName']).size()
+        duplicate_count = len(duplicates[duplicates > 1])
+        st.sidebar.write(f"Duplicate facility-date entries: {duplicate_count}")
 else:
     st.sidebar.error("❌ Supply DataFrame is EMPTY")
-
-if not model.empty:
-    st.sidebar.write("**Model columns:**", list(model.columns))
-    st.sidebar.write("Model sample:")
-    st.sidebar.dataframe(model.head(3))
-else:
-    st.sidebar.error("❌ Model DataFrame is EMPTY")
-
-# RAW CSV DEBUG
-st.sidebar.write("**📁 Raw CSV Debug:**")
-try:
-    nameplate = dfc.fetch_csv("nameplate", force=False)
-    flows = dfc.fetch_csv("flows", force=False)
-    mto = dfc.fetch_csv("mto_future", force=False)
-    
-    st.sidebar.write(f"Raw nameplate shape: {nameplate.shape}")
-    st.sidebar.write(f"Raw flows shape: {flows.shape}")
-    st.sidebar.write(f"Raw MTO shape: {mto.shape}")
-    
-    # FACILITY TYPE DEBUG - This is the key issue
-    st.sidebar.write("**🏭 Facility Type Analysis:**")
-    if 'facilitytype' in nameplate.columns:
-        facility_types = nameplate['facilitytype'].value_counts()
-        st.sidebar.write("Nameplate facility types:")
-        st.sidebar.dataframe(facility_types)
-    else:
-        st.sidebar.error("No 'facilitytype' column in nameplate")
-    
-    if 'facilitytype' in mto.columns:
-        mto_types = mto['facilitytype'].value_counts()
-        st.sidebar.write("MTO facility types:")
-        st.sidebar.dataframe(mto_types)
-    else:
-        st.sidebar.error("No 'facilitytype' column in MTO")
-        
-    # COLUMN STRUCTURE DEBUG
-    st.sidebar.write("**📋 Column Structure:**")
-    st.sidebar.write("Nameplate columns:", list(nameplate.columns))
-    st.sidebar.write("MTO columns:", list(mto.columns))
-    st.sidebar.write("Flows columns:", list(flows.columns))
-    
-except Exception as e:
-    st.sidebar.error(f"Raw data debug error: {e}")
-
-# CLEANING FUNCTION DEBUG
-st.sidebar.write("**🔧 Data Cleaning Debug:**")
-try:
-    # Test individual cleaning functions
-    nameplate_raw = dfc.fetch_csv("nameplate", force=False)
-    nameplate_clean = dfc.clean_nameplate(nameplate_raw)
-    st.sidebar.write(f"Nameplate: {nameplate_raw.shape} → {nameplate_clean.shape}")
-    
-    mto_raw = dfc.fetch_csv("mto_future", force=False)
-    mto_clean = dfc.clean_mto(mto_raw)
-    st.sidebar.write(f"MTO: {mto_raw.shape} → {mto_clean.shape}")
-    
-    flows_raw = dfc.fetch_csv("flows", force=False)
-    demand_clean = dfc.build_demand_profile()
-    st.sidebar.write(f"Demand: {flows_raw.shape} → {demand_clean.shape}")
-    
-except Exception as e:
-    st.sidebar.error(f"Cleaning debug error: {e}")
 
 # MAIN DASHBOARD LOGIC
 if model.empty:
@@ -134,17 +74,6 @@ else:
     if missing_cols:
         st.error(f"❌ Missing required columns: {missing_cols}")
         st.write("**Available columns in model:**", list(model.columns))
-        st.write("**This suggests an issue in the data_fetcher.py merge operation**")
-        
-        # Show debugging info
-        st.write("**Debugging Information:**")
-        st.write("1. Check if supply data is empty (supply shape above)")
-        st.write("2. Check facility types in sidebar - are they 'production'?")
-        st.write("3. Check if column names match expectations")
-        
-        if not model.empty:
-            st.write("**Current model data:**")
-            st.dataframe(model.head())
         st.stop()
     
     # Apply Yara adjustment
@@ -152,10 +81,14 @@ else:
     model_adj["TJ_Demand"] = model_adj["TJ_Demand"] + (yara_val - 80)
     model_adj["Shortfall"] = model_adj["TJ_Available"] - model_adj["TJ_Demand"]
     
-    # Create supply stack chart
+    # Create supply stack chart with duplicate handling
     if not sup.empty and 'TJ_Available' in sup.columns and 'FacilityName' in sup.columns and 'GasDay' in sup.columns:
         try:
-            stack = sup.pivot(index="GasDay", columns="FacilityName", values="TJ_Available")
+            # CRITICAL FIX: Aggregate duplicate facility-date combinations
+            sup_agg = sup.groupby(['GasDay', 'FacilityName'])['TJ_Available'].sum().reset_index()
+            
+            # Now pivot the aggregated data
+            stack = sup_agg.pivot(index="GasDay", columns="FacilityName", values="TJ_Available")
             today_dt = pd.to_datetime(date.today())
             stack = stack.loc[stack.index >= today_dt]
             
@@ -180,21 +113,37 @@ else:
                 st.plotly_chart(fig1, use_container_width=True)
             else:
                 st.warning("⚠️ No future supply data available for chart")
-                st.write("This could mean:")
-                st.write("- All supply data is in the past")
-                st.write("- Date filtering removed all records")
+                st.write("This could mean all supply data is historical (before today)")
         except Exception as e:
             st.error(f"Error creating supply chart: {e}")
-            st.write("Stack pivot shape:", stack.shape if 'stack' in locals() else "Not created")
+            
+            # Enhanced debug information
+            st.write("**Debug Info:**")
+            if not sup.empty:
+                # Check for duplicates
+                duplicates = sup.groupby(['GasDay', 'FacilityName']).size()
+                duplicate_entries = duplicates[duplicates > 1]
+                if not duplicate_entries.empty:
+                    st.write(f"Found {len(duplicate_entries)} duplicate facility-date combinations:")
+                    st.dataframe(duplicate_entries.head(10))
+                    st.write("Sample duplicate data:")
+                    first_duplicate = duplicate_entries.index[0]
+                    sample_duplicates = sup[
+                        (sup['GasDay'] == first_duplicate[0]) & 
+                        (sup['FacilityName'] == first_duplicate[1])
+                    ]
+                    st.dataframe(sample_duplicates)
+                else:
+                    st.write("No duplicates found - different error cause")
+                    st.write("Supply data sample:")
+                    st.dataframe(sup.head())
     else:
         st.error("❌ Supply data missing required columns for stacked chart")
         st.write("**Required columns:** ['TJ_Available', 'FacilityName', 'GasDay']")
         if not sup.empty:
             st.write("**Available supply columns:**", list(sup.columns))
-            st.write("**Supply data sample:**")
-            st.dataframe(sup.head())
         else:
-            st.write("**Supply DataFrame is empty - check facility type filtering**")
+            st.write("**Supply DataFrame is empty**")
     
     # Supply-demand balance bar chart
     try:
@@ -236,13 +185,10 @@ else:
     except Exception as e:
         st.error(f"Error creating data table: {e}")
 
-# FINAL DEBUG SUMMARY
-st.sidebar.write("**🎯 Debug Summary:**")
+# Final debug summary
+st.sidebar.write("**🎯 Status Summary:**")
 st.sidebar.write(f"Dashboard loaded: {'✅' if not model.empty else '❌'}")
 st.sidebar.write(f"Supply data: {'✅' if not sup.empty else '❌'}")
 st.sidebar.write(f"Model has TJ_Available: {'✅' if not model.empty and 'TJ_Available' in model.columns else '❌'}")
 st.sidebar.write(f"Model has TJ_Demand: {'✅' if not model.empty and 'TJ_Demand' in model.columns else '❌'}")
 st.sidebar.write(f"Supply has required cols: {'✅' if not sup.empty and all(col in sup.columns for col in ['TJ_Available', 'FacilityName', 'GasDay']) else '❌'}")
-
-# STREAMLIT CLOUD LOGS REMINDER
-st.sidebar.info("💡 **Tip:** Check Streamlit Cloud logs (Manage app → Logs) for detailed [DEBUG] messages from data_fetcher.py")
