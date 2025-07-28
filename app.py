@@ -33,31 +33,82 @@ if st.sidebar.button("Refresh AEMO Data"):
 # Load data
 sup, model = load_real_data()
 
-# DEBUG: Show what we actually got
-st.sidebar.write("**Debug Information:**")
+# COMPREHENSIVE DEBUG SECTION
+st.sidebar.write("**📊 Debug Information:**")
 st.sidebar.write(f"Supply DataFrame shape: {sup.shape}")
 st.sidebar.write(f"Model DataFrame shape: {model.shape}")
 
+# Show DataFrame columns and samples
 if not sup.empty:
-    st.sidebar.write("Supply columns:", list(sup.columns))
+    st.sidebar.write("**Supply columns:**", list(sup.columns))
     st.sidebar.write("Supply sample:")
     st.sidebar.dataframe(sup.head(3))
+else:
+    st.sidebar.error("❌ Supply DataFrame is EMPTY")
 
 if not model.empty:
-    st.sidebar.write("Model columns:", list(model.columns))
+    st.sidebar.write("**Model columns:**", list(model.columns))
     st.sidebar.write("Model sample:")
     st.sidebar.dataframe(model.head(3))
+else:
+    st.sidebar.error("❌ Model DataFrame is EMPTY")
 
-# Additional debug: Test raw data
-st.sidebar.write("**Raw CSV Debug:**")
+# RAW CSV DEBUG
+st.sidebar.write("**📁 Raw CSV Debug:**")
 try:
     nameplate = dfc.fetch_csv("nameplate", force=False)
     flows = dfc.fetch_csv("flows", force=False)
+    mto = dfc.fetch_csv("mto_future", force=False)
+    
     st.sidebar.write(f"Raw nameplate shape: {nameplate.shape}")
     st.sidebar.write(f"Raw flows shape: {flows.shape}")
+    st.sidebar.write(f"Raw MTO shape: {mto.shape}")
+    
+    # FACILITY TYPE DEBUG - This is the key issue
+    st.sidebar.write("**🏭 Facility Type Analysis:**")
+    if 'facilitytype' in nameplate.columns:
+        facility_types = nameplate['facilitytype'].value_counts()
+        st.sidebar.write("Nameplate facility types:")
+        st.sidebar.dataframe(facility_types)
+    else:
+        st.sidebar.error("No 'facilitytype' column in nameplate")
+    
+    if 'facilitytype' in mto.columns:
+        mto_types = mto['facilitytype'].value_counts()
+        st.sidebar.write("MTO facility types:")
+        st.sidebar.dataframe(mto_types)
+    else:
+        st.sidebar.error("No 'facilitytype' column in MTO")
+        
+    # COLUMN STRUCTURE DEBUG
+    st.sidebar.write("**📋 Column Structure:**")
+    st.sidebar.write("Nameplate columns:", list(nameplate.columns))
+    st.sidebar.write("MTO columns:", list(mto.columns))
+    st.sidebar.write("Flows columns:", list(flows.columns))
+    
 except Exception as e:
-    st.sidebar.error(f"Raw data error: {e}")
+    st.sidebar.error(f"Raw data debug error: {e}")
 
+# CLEANING FUNCTION DEBUG
+st.sidebar.write("**🔧 Data Cleaning Debug:**")
+try:
+    # Test individual cleaning functions
+    nameplate_raw = dfc.fetch_csv("nameplate", force=False)
+    nameplate_clean = dfc.clean_nameplate(nameplate_raw)
+    st.sidebar.write(f"Nameplate: {nameplate_raw.shape} → {nameplate_clean.shape}")
+    
+    mto_raw = dfc.fetch_csv("mto_future", force=False)
+    mto_clean = dfc.clean_mto(mto_raw)
+    st.sidebar.write(f"MTO: {mto_raw.shape} → {mto_clean.shape}")
+    
+    flows_raw = dfc.fetch_csv("flows", force=False)
+    demand_clean = dfc.build_demand_profile()
+    st.sidebar.write(f"Demand: {flows_raw.shape} → {demand_clean.shape}")
+    
+except Exception as e:
+    st.sidebar.error(f"Cleaning debug error: {e}")
+
+# MAIN DASHBOARD LOGIC
 if model.empty:
     st.error("No data available - using sample data")
     # Sample data fallback
@@ -82,12 +133,17 @@ else:
     
     if missing_cols:
         st.error(f"❌ Missing required columns: {missing_cols}")
-        st.write("Available columns in model:", list(model.columns))
-        st.write("This suggests an issue in the data_fetcher.py merge operation")
+        st.write("**Available columns in model:**", list(model.columns))
+        st.write("**This suggests an issue in the data_fetcher.py merge operation**")
         
-        # Show what's actually in the model
+        # Show debugging info
+        st.write("**Debugging Information:**")
+        st.write("1. Check if supply data is empty (supply shape above)")
+        st.write("2. Check facility types in sidebar - are they 'production'?")
+        st.write("3. Check if column names match expectations")
+        
         if not model.empty:
-            st.write("Current model data:")
+            st.write("**Current model data:**")
             st.dataframe(model.head())
         st.stop()
     
@@ -97,7 +153,7 @@ else:
     model_adj["Shortfall"] = model_adj["TJ_Available"] - model_adj["TJ_Demand"]
     
     # Create supply stack chart
-    if not sup.empty and 'TJ_Available' in sup.columns and 'FacilityName' in sup.columns:
+    if not sup.empty and 'TJ_Available' in sup.columns and 'FacilityName' in sup.columns and 'GasDay' in sup.columns:
         try:
             stack = sup.pivot(index="GasDay", columns="FacilityName", values="TJ_Available")
             today_dt = pd.to_datetime(date.today())
@@ -109,36 +165,49 @@ else:
                               title="WA Gas Supply by Facility (Stacked)")
                 
                 # Add demand line
-                fig1.add_scatter(x=model_adj["GasDay"], y=model_adj["TJ_Demand"],
-                               mode="lines", name="Demand",
-                               line=dict(color="black", width=3))
+                if 'GasDay' in model_adj.columns:
+                    fig1.add_scatter(x=model_adj["GasDay"], y=model_adj["TJ_Demand"],
+                                   mode="lines", name="Demand",
+                                   line=dict(color="black", width=3))
                 
                 # Add shortfall markers
                 shortfalls = model_adj[model_adj["Shortfall"] < 0]
-                if not shortfalls.empty:
+                if not shortfalls.empty and 'GasDay' in shortfalls.columns:
                     fig1.add_scatter(x=shortfalls["GasDay"], y=shortfalls["TJ_Demand"],
                                    mode="markers", name="Shortfall",
                                    marker=dict(color="red", size=7, symbol="x"))
                 
                 st.plotly_chart(fig1, use_container_width=True)
             else:
-                st.warning("No future supply data available for chart")
+                st.warning("⚠️ No future supply data available for chart")
+                st.write("This could mean:")
+                st.write("- All supply data is in the past")
+                st.write("- Date filtering removed all records")
         except Exception as e:
             st.error(f"Error creating supply chart: {e}")
+            st.write("Stack pivot shape:", stack.shape if 'stack' in locals() else "Not created")
     else:
-        st.warning("Supply data missing required columns for stacked chart")
+        st.error("❌ Supply data missing required columns for stacked chart")
+        st.write("**Required columns:** ['TJ_Available', 'FacilityName', 'GasDay']")
         if not sup.empty:
-            st.write("Available supply columns:", list(sup.columns))
+            st.write("**Available supply columns:**", list(sup.columns))
+            st.write("**Supply data sample:**")
+            st.dataframe(sup.head())
+        else:
+            st.write("**Supply DataFrame is empty - check facility type filtering**")
     
     # Supply-demand balance bar chart
     try:
-        fig2 = px.bar(model_adj, x="GasDay", y="Shortfall",
-                      color=model_adj["Shortfall"] >= 0,
-                      color_discrete_map={True: "green", False: "red"},
-                      labels={"Shortfall": "Supply-Demand Gap (TJ)"},
-                      title="Daily Market Balance")
-        fig2.update_layout(showlegend=False)
-        st.plotly_chart(fig2, use_container_width=True)
+        if 'GasDay' in model_adj.columns and 'Shortfall' in model_adj.columns:
+            fig2 = px.bar(model_adj, x="GasDay", y="Shortfall",
+                          color=model_adj["Shortfall"] >= 0,
+                          color_discrete_map={True: "green", False: "red"},
+                          labels={"Shortfall": "Supply-Demand Gap (TJ)"},
+                          title="Daily Market Balance")
+            fig2.update_layout(showlegend=False)
+            st.plotly_chart(fig2, use_container_width=True)
+        else:
+            st.error("Missing columns for balance chart")
     except Exception as e:
         st.error(f"Error creating balance chart: {e}")
     
@@ -163,13 +232,17 @@ else:
             st.dataframe(display_df, use_container_width=True)
         else:
             st.error("No suitable columns available for data table")
-            st.write("Available columns:", list(model_adj.columns))
+            st.write("**Available columns:**", list(model_adj.columns))
     except Exception as e:
         st.error(f"Error creating data table: {e}")
 
-# Final debug summary
-st.sidebar.write("**Debug Summary:**")
+# FINAL DEBUG SUMMARY
+st.sidebar.write("**🎯 Debug Summary:**")
 st.sidebar.write(f"Dashboard loaded: {'✅' if not model.empty else '❌'}")
 st.sidebar.write(f"Supply data: {'✅' if not sup.empty else '❌'}")
-st.sidebar.write(f"Model has TJ_Available: {'✅' if 'TJ_Available' in model.columns else '❌'}")
-st.sidebar.write(f"Model has TJ_Demand: {'✅' if 'TJ_Demand' in model.columns else '❌'}")
+st.sidebar.write(f"Model has TJ_Available: {'✅' if not model.empty and 'TJ_Available' in model.columns else '❌'}")
+st.sidebar.write(f"Model has TJ_Demand: {'✅' if not model.empty and 'TJ_Demand' in model.columns else '❌'}")
+st.sidebar.write(f"Supply has required cols: {'✅' if not sup.empty and all(col in sup.columns for col in ['TJ_Available', 'FacilityName', 'GasDay']) else '❌'}")
+
+# STREAMLIT CLOUD LOGS REMINDER
+st.sidebar.info("💡 **Tip:** Check Streamlit Cloud logs (Manage app → Logs) for detailed [DEBUG] messages from data_fetcher.py")
