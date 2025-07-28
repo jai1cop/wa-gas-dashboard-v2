@@ -60,16 +60,10 @@ def fetch_csv(key, force=False):
         return pd.DataFrame()
 
 def clean_nameplate(df):
-    """Extract ALL facilities from nameplate data (no facility type filtering)"""
+    """Extract ALL facilities from nameplate data"""
     print(f"[DEBUG] Nameplate input: {df.shape}")
     
-    if df.empty:
-        return pd.DataFrame(columns=["FacilityName", "TJ_Nameplate"])
-    
-    # Don't filter by facility type - use ALL facilities
-    # Check for capacity column
-    if 'capacityquantity' not in df.columns:
-        print(f"[WARNING] No capacityquantity column in nameplate")
+    if df.empty or 'capacityquantity' not in df.columns:
         return pd.DataFrame(columns=["FacilityName", "TJ_Nameplate"])
     
     result = df[['facilityname', 'capacityquantity']].copy()
@@ -78,27 +72,23 @@ def clean_nameplate(df):
         'capacityquantity': 'TJ_Nameplate'
     }, inplace=True)
     
-    # Remove any rows with missing values
     result = result.dropna()
-    
     print(f"[DEBUG] Nameplate output: {result.shape} facilities")
     return result
 
 def clean_mto(df):
-    """Extract ALL facilities from MTO data (no facility type filtering)"""
+    """Extract ALL facilities from MTO data and aggregate duplicates"""
     print(f"[DEBUG] MTO input: {df.shape}")
     
     if df.empty:
         return pd.DataFrame(columns=["FacilityName", "GasDay", "TJ_Available"])
     
-    # MTO data doesn't have facilitytype - use ALL records
     required_cols = ['facilityname', 'fromgasdate', 'outlookquantity']
     missing = [col for col in required_cols if col not in df.columns]
     if missing:
         print(f"[WARNING] Missing MTO columns: {missing}")
         return pd.DataFrame(columns=["FacilityName", "GasDay", "TJ_Available"])
 
-    # Process all facilities
     df['fromgasdate'] = pd.to_datetime(df['fromgasdate'], errors="coerce")
     result = df[['facilityname', 'fromgasdate', 'outlookquantity']].copy()
     result = result.dropna(subset=['fromgasdate'])
@@ -109,7 +99,10 @@ def clean_mto(df):
         'outlookquantity': 'TJ_Available'
     }, inplace=True)
     
-    print(f"[DEBUG] MTO output: {result.shape} records")
+    # Aggregate duplicates by summing capacity for same facility-date
+    result = result.groupby(['FacilityName', 'GasDay'])['TJ_Available'].sum().reset_index()
+    
+    print(f"[DEBUG] MTO output: {result.shape} records (after deduplication)")
     return result
 
 def build_supply_profile():
@@ -119,14 +112,11 @@ def build_supply_profile():
 
     print(f"[DEBUG] Supply building - Nameplate: {nameplate.shape}, MTO: {mto.shape}")
 
-    # If both are empty, return empty
     if nameplate.empty and mto.empty:
-        print("[WARNING] Both nameplate and MTO data empty")
         return pd.DataFrame(columns=["FacilityName", "GasDay", "TJ_Available", "TJ_Nameplate"])
     
     # If no MTO data, create future dates with nameplate capacity
     if mto.empty and not nameplate.empty:
-        print("[WARNING] No MTO data - creating future supply from nameplate")
         dates = pd.date_range(start=pd.Timestamp.now(), periods=365, freq='D')
         supply_list = []
         for _, facility in nameplate.iterrows():
@@ -137,13 +127,10 @@ def build_supply_profile():
                     'TJ_Available': facility['TJ_Nameplate'],
                     'TJ_Nameplate': facility['TJ_Nameplate']
                 })
-        result = pd.DataFrame(supply_list)
-        print(f"[DEBUG] Created supply from nameplate: {result.shape}")
-        return result
+        return pd.DataFrame(supply_list)
 
     # If no nameplate data, use MTO only
     if nameplate.empty and not mto.empty:
-        print("[WARNING] No nameplate data - using MTO only")
         mto['TJ_Nameplate'] = mto['TJ_Available']
         return mto
 
@@ -160,7 +147,6 @@ def build_demand_profile():
     print(f"[DEBUG] Demand building from flows: {flows.shape}")
     
     if flows.empty or 'gasdate' not in flows.columns or 'demand' not in flows.columns:
-        print("[WARNING] Missing required flow columns")
         return pd.DataFrame(columns=["GasDay", "TJ_Demand"])
 
     flows['gasdate'] = pd.to_datetime(flows['gasdate'], errors="coerce")
@@ -181,11 +167,9 @@ def get_model():
     print(f"[DEBUG] get_model - Supply: {sup.shape}, Demand: {dem.shape}")
 
     if dem.empty:
-        print("[WARNING] No demand data")
         return sup, dem
 
     if sup.empty:
-        print("[WARNING] No supply data - creating zero supply model")
         dem['TJ_Available'] = 0
         dem['Shortfall'] = dem['TJ_Available'] - dem['TJ_Demand']
         return sup, dem
