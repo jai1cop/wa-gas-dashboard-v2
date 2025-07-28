@@ -1,4 +1,3 @@
-# wa-gas-dashboard-v2
 # WA Gas Supply & Demand Dashboard
 
 A real-time Western Australia gas market intelligence dashboard that integrates with AEMO Gas Bulletin Board data.
