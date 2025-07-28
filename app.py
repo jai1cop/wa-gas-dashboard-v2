@@ -80,6 +80,16 @@ else:
                                marker=dict(color="red", size=7, symbol="x"))
             
             st.plotly_chart(fig1, use_container_width=True)
+
+# Add this right after: sup, model = load_real_data()
+st.sidebar.write("**Debug Model Columns:**")
+st.sidebar.write(f"Model columns: {list(model.columns)}")
+st.sidebar.write(f"Model shape: {model.shape}")
+st.sidebar.write(f"Supply shape: {sup.shape}")
+if not model.empty:
+    st.sidebar.write("First few model rows:")
+    st.sidebar.dataframe(model.head())
+
     
     # Supply-demand balance bar chart
     fig2 = px.bar(model_adj, x="GasDay", y="Shortfall",
