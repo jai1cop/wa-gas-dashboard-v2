@@ -58,40 +58,42 @@ def fetch_csv(key, force=False):
     except Exception as e:
         print(f"[ERROR] Could not load {key}: {e}")
         if key == "nameplate":
-            return pd.DataFrame(columns=["facilityname", "facilitytype", "nameplaterating"])
+            return pd.DataFrame(columns=["facilityname", "facilitytype", "capacityquantity"])
         elif key == "mto_future":
-            return pd.DataFrame(columns=["facilityname", "facilitytype", "gasday", "capacity"])
+            return pd.DataFrame(columns=["facilityname", "facilitytype", "fromgasdate", "outlookquantity"])
         elif key == "flows":
-            return pd.DataFrame(columns=["gasday", "zonetype", "zonename", "quantity"])
+            return pd.DataFrame(columns=["gasdate", "facilityname", "facilitytype", "supply", "demand"])
         return pd.DataFrame()
 
 def clean_nameplate(df):
-    required = {"facilityname", "facilitytype", "nameplaterating"}
+    # Updated for actual column names: capacityquantity instead of nameplaterating
+    required = {"facilityname", "facilitytype", "capacityquantity"}
     if not required.issubset(df.columns):
         print(f"[WARNING] Missing nameplate columns: {required - set(df.columns)}")
         return pd.DataFrame(columns=["FacilityName", "TJ_Nameplate"])
 
     prod = df[df["facilitytype"] == "production"].copy()
-    prod = prod[["facilityname", "nameplaterating"]]
+    prod = prod[["facilityname", "capacityquantity"]]
     prod.rename(columns={
         "facilityname": "FacilityName", 
-        "nameplaterating": "TJ_Nameplate"
+        "capacityquantity": "TJ_Nameplate"
     }, inplace=True)
     return prod
 
 def clean_mto(df):
-    required = {"facilityname", "facilitytype", "gasday", "capacity"}
+    # Updated for actual column names: fromgasdate, outlookquantity
+    required = {"facilityname", "facilitytype", "fromgasdate", "outlookquantity"}
     if not required.issubset(df.columns):
         print(f"[WARNING] Missing MTO columns: {required - set(df.columns)}")
         return pd.DataFrame(columns=["FacilityName", "GasDay", "TJ_Available"])
 
-    df["gasday"] = pd.to_datetime(df["gasday"], errors="coerce")
+    df["fromgasdate"] = pd.to_datetime(df["fromgasdate"], errors="coerce")
     prod = df[df["facilitytype"] == "production"].copy()
-    prod = prod[["facilityname", "gasday", "capacity"]].dropna(subset=["gasday"])
+    prod = prod[["facilityname", "fromgasdate", "outlookquantity"]].dropna(subset=["fromgasdate"])
     prod.rename(columns={
         "facilityname": "FacilityName",
-        "gasday": "GasDay", 
-        "capacity": "TJ_Available"
+        "fromgasdate": "GasDay", 
+        "outlookquantity": "TJ_Available"
     }, inplace=True)
     return prod
 
@@ -108,20 +110,18 @@ def build_supply_profile():
     return supply
 
 def build_demand_profile():
+    # Updated for actual flow data structure: gasdate, demand columns
     flows = fetch_csv("flows")
-    required = {"gasday", "zonetype", "zonename", "quantity"}
+    required = {"gasdate", "facilityname", "demand"}
     if not required.issubset(flows.columns):
         print(f"[WARNING] Missing flow columns: {required - set(flows.columns)}")
         return pd.DataFrame(columns=["GasDay", "TJ_Demand"])
 
-    flows["gasday"] = pd.to_datetime(flows["gasday"], errors="coerce")
-    wa_demand = flows[
-        (flows["zonetype"] == "demand") & 
-        (flows["zonename"] == "whole wa")
-    ]
+    flows["gasdate"] = pd.to_datetime(flows["gasdate"], errors="coerce")
     
-    demand = wa_demand.groupby("gasday")["quantity"].sum().reset_index()
-    demand.rename(columns={"gasday": "GasDay", "quantity": "TJ_Demand"}, inplace=True)
+    # Aggregate demand by date
+    demand = flows.groupby("gasdate")["demand"].sum().reset_index()
+    demand.rename(columns={"gasdate": "GasDay", "demand": "TJ_Demand"}, inplace=True)
     demand = demand.dropna(subset=["GasDay"])
     return demand
 
