@@ -1,4 +1,10 @@
+import streamlit as st
+import pandas as pd
+import plotly.express as px
 import data_fetcher as dfc
+
+st.set_page_config("WA Gas Dashboard", layout="wide")
+st.title("WA Gas Supply & Demand Dashboard")
 
 # Load real AEMO data
 @st.cache_data(ttl=3600)  # Cache for 1 hour
